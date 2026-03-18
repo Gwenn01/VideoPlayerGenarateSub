@@ -9,6 +9,7 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  Download,
 } from "lucide-react";
 
 const formatBytes = (bytes: number): string => {
@@ -48,6 +49,10 @@ const Home = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [result, setResult] = useState<{
+    subtitle: string;
+    text: string;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -144,7 +149,8 @@ const Home = () => {
     }, STEPS[0].duration + 500);
 
     try {
-      await translateVideo(file);
+      const response = await translateVideo(file); // make sure this returns the data
+      setResult(response); //  save subtitle path
 
       // Finish cleanly
       if (progressRef.current) clearInterval(progressRef.current);
@@ -159,6 +165,17 @@ const Home = () => {
       setError(err instanceof Error ? err.message : "Unknown error occurred");
       setLoading(false);
     }
+  };
+
+  const handleDownload = () => {
+    if (!result) return;
+    const blob = new Blob([result.subtitle], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "subtitle.srt";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const overallProgress =
@@ -520,26 +537,29 @@ const Home = () => {
         )}
 
         {/* ── SUCCESS ── */}
-        {success && (
-          <div
-            className="mt-4 rounded-xl px-4 py-3.5 flex items-center gap-3"
-            style={{
-              background: "rgba(16,185,129,0.06)",
-              border: "1px solid rgba(16,185,129,0.2)",
-            }}
-          >
-            <CheckCircle2
-              size={22}
-              style={{ color: "#34d399", flexShrink: 0 }}
-            />
-            <div>
-              <p className="text-sm font-medium text-emerald-400">
-                Subtitles generated
-              </p>
-              <p className="text-xs text-emerald-400/50 mt-0.5">
-                Your video has been processed successfully
-              </p>
+        {success && result && (
+          <div className="mt-4 rounded-xl overflow-hidden bg-emerald-500/5 border border-emerald-500/20">
+            {/* Header */}
+            <div className="px-4 py-3.5 flex items-center gap-3">
+              <CheckCircle2 size={22} className="text-emerald-400 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-emerald-400">
+                  Subtitles generated
+                </p>
+                <p className="text-xs text-emerald-400/50 mt-0.5">
+                  Your file is ready to download
+                </p>
+              </div>
             </div>
+
+            {/* Download button */}
+            <button
+              onClick={handleDownload}
+              className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg text-sm font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors"
+            >
+              <Download size={15} />
+              Download .srt
+            </button>
           </div>
         )}
 

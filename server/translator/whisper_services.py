@@ -10,14 +10,14 @@ print("FFmpeg detected at:", shutil.which("ffmpeg"))
 model = whisper.load_model("base")
 
 def transcribe_audio(file_path):
-    file_path = os.path.join(BASE_DIR, file_path)
+    if not os.path.isabs(file_path):
+        file_path = os.path.join(BASE_DIR, file_path)
     print("Processing file:", file_path)
     result = model.transcribe(file_path)
     return {
         "text": result["text"],
         "segments": result["segments"]
     }
-    
     
 def format_time(seconds):
     millis = int(seconds * 1000)

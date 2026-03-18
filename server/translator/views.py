@@ -40,9 +40,7 @@ class TranslatorView(APIView):
 
             return Response({
                 "message": "Processing successful",
-                "original_video": result["original_video"],
-                "subtitle": result["subtitle"],
-                "video": result["video"],
+                "subtitle": result["subtitle"],  
                 "text": result["text"],
             }, status=status.HTTP_200_OK)
 
@@ -51,4 +49,3 @@ class TranslatorView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
- 

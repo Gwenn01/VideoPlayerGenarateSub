@@ -15,52 +15,40 @@ class TranslatorService:
         subprocess.run(cmd, check=True)
         return audio_path
     
-    # attach the subtle on the video
-    @staticmethod
-    def attach_subtitle(video_path: str, subtitle_path: str) -> dict:
-        output_dir = os.path.join(settings.MEDIA_ROOT, "video_sub")
-        os.makedirs(output_dir, exist_ok=True)
-
-        base_name = os.path.splitext(os.path.basename(video_path))[0]
-
-        unique_id = uuid.uuid4().hex
-
-        soft_path = os.path.join(output_dir, f"{base_name}_{unique_id}_soft.mp4")
-        burn_path = os.path.join(output_dir, f"{base_name}_{unique_id}_burned.mp4")
-
-        AttachSubtitleService.attach_subtitle_to_video(video_path, subtitle_path, soft_path)
-        AttachSubtitleService.burn_subtitle_to_video(video_path, subtitle_path, burn_path)
-
-        return {
-            "soft_path": soft_path,
-            "burned_path": burn_path,
-        }
-
-    @staticmethod
+    
     # LAST STEP PROCESSING VIDEO
+    @staticmethod
     def process_video(video_path: str) -> dict:
-        print("Step 1: Extracting audio...")
-        audio_path = TranslatorService.extract_audio(video_path)
-
-        print("Step 2: Transcribing audio...")
-        result = transcribe_audio(audio_path)
-
-        print("Step 3: Generating subtitle...")
         srt_path = os.path.splitext(video_path)[0] + ".srt"
-        save_srt(result["segments"], srt_path)
 
-        print("Step 4: Attaching subtitle to video...")
-        output_path = os.path.splitext(video_path)[0] + "_subtitled.mp4"
-        final_video = AttachSubtitleService.attach_subtitle(video_path, srt_path, output_path)
-        print("Done!")
+        try:
+            print("Step 1: Extracting audio...")
+            audio_path = TranslatorService.extract_audio(video_path)
+
+            print("Step 2: Transcribing audio...")
+            result = transcribe_audio(audio_path)
+
+            print("Step 3: Generating subtitle...")
+            save_srt(result["segments"], srt_path)
+
+            #  Read subtitle content
+            with open(srt_path, "r", encoding="utf-8") as f:
+                subtitle_content = f.read()
+
+        finally:
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            if os.path.exists(srt_path):
+                os.remove(srt_path)
+            print("Done!")
+
         return {
-            "original_video": video_path,
-            "subtitle": srt_path,
-            "video": final_video,
+            "subtitle": subtitle_content,  # <-- actual file content
             "text": result["text"],
         }
-
-
+        
     @staticmethod        
     # CLEANUP 
     def delete_upload_files(*paths: str) -> None:
