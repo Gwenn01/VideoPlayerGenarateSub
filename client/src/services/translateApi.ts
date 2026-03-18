@@ -1,14 +1,20 @@
-import { apiClient } from "./apiClient";
-import type { TranslationResult } from "../types/translation";
+const BASE_URL = "http://localhost:8000/api";
 
-// api for translate video
-export const translateVideo = async (
-  file: File,
-): Promise<TranslationResult> => {
+// ── Transcribe video ─────────────────────────────────────────────────────────
+
+export const translateVideo = async (file: File) => {
   const formData = new FormData();
   formData.append("video", file);
-  return apiClient<TranslationResult>("translate/", {
+
+  const res = await fetch(`${BASE_URL}/translate/`, {
     method: "POST",
     body: formData,
   });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Transcription failed");
+  }
+
+  return res.json();
 };

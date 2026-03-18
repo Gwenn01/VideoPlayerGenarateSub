@@ -8,3 +8,6 @@ __pycache__/
 server/translator/bin/
 translator/bin/
 bin/
+server/media/uploads/
+media/uploads/
+uploads/

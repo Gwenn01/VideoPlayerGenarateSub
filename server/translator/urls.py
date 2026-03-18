@@ -1,9 +1,6 @@
-from rest_framework.urlpatterns import format_suffix_patterns
 from django.urls import path
-from .views import TranslatorViews
-
+from .views import TranslatorView
+ 
 urlpatterns = [
-    path('translate/', TranslatorViews.as_view(), name='translate'),
+    path("translate/", TranslatorView.as_view()),
 ]
-
-urlpatterns = format_suffix_patterns(urlpatterns)

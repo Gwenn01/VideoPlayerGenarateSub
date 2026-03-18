@@ -1,32 +1,42 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { translateVideo } from "../services/translateApi";
-import type { TranslationResult } from "../types/translation";
-
-const formatTime = (seconds: number): string => {
-  const m = Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0");
-  const s = Math.floor(seconds % 60)
-    .toString()
-    .padStart(2, "0");
-  const ms = Math.floor((seconds % 1) * 100)
-    .toString()
-    .padStart(2, "0");
-  return `${m}:${s}.${ms}`;
-};
+import {
+  Upload,
+  Video,
+  Check,
+  Loader2,
+  Info,
+  X,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 };
 
-type Tab = "preview" | "transcript" | "segments";
-
 const STEPS = [
-  "Extracting audio",
-  "Transcribing",
-  "Generating subtitles",
-  "Finalizing",
+  {
+    label: "Extracting audio",
+    desc: "Separating audio track from video",
+    duration: 4000,
+  },
+  {
+    label: "Transcribing",
+    desc: "Whisper AI is analysing speech",
+    duration: 8000,
+  },
+  {
+    label: "Generating subtitles",
+    desc: "Building SRT timestamp file",
+    duration: 5000,
+  },
+  {
+    label: "Finalizing",
+    desc: "Attaching subtitles to video",
+    duration: 4000,
+  },
 ];
 
 const Home = () => {
@@ -34,12 +44,63 @@ const Home = () => {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
-  const [result, setResult] = useState<TranslationResult | null>(null);
+  const [stepProgress, setStepProgress] = useState(0); // 0-100 per step
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("preview");
+  const [success, setSuccess] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Elapsed timer
+  useEffect(() => {
+    if (loading) {
+      setElapsedSeconds(0);
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds((s) => s + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [loading]);
+
+  const formatElapsed = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  const startStepProgress = (idx: number) => {
+    if (progressRef.current) clearInterval(progressRef.current);
+    setStepProgress(0);
+    const duration = STEPS[idx]?.duration ?? 4000;
+    const tick = 80;
+    const increment = (tick / duration) * 100;
+
+    progressRef.current = setInterval(() => {
+      setStepProgress((p) => {
+        if (p >= 95) {
+          if (progressRef.current) clearInterval(progressRef.current);
+          return 95; // Hold at 95% until confirmed
+        }
+        return Math.min(p + increment, 95);
+      });
+    }, tick);
+  };
+
+  const advanceStep = useCallback((currentIdx: number) => {
+    const nextIdx = currentIdx + 1;
+    if (nextIdx < STEPS.length) {
+      setStepIndex(nextIdx);
+      startStepProgress(nextIdx);
+
+      stepTimeoutRef.current = setTimeout(() => {
+        advanceStep(nextIdx);
+      }, STEPS[nextIdx].duration + 500);
+    }
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -47,8 +108,8 @@ const Home = () => {
     const dropped = e.dataTransfer.files[0];
     if (dropped && dropped.type.startsWith("video/")) {
       setFile(dropped);
-      setResult(null);
       setError(null);
+      setSuccess(false);
     }
   }, []);
 
@@ -56,343 +117,485 @@ const Home = () => {
     const f = e.target.files?.[0];
     if (f) {
       setFile(f);
-      setResult(null);
       setError(null);
+      setSuccess(false);
     }
   };
 
   const handleRemove = (e: React.MouseEvent) => {
     e.stopPropagation();
     setFile(null);
-    setResult(null);
     setError(null);
+    setSuccess(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleSubmit = async () => {
     if (!file) return;
+
     setLoading(true);
     setError(null);
-    setResult(null);
+    setSuccess(false);
     setStepIndex(0);
+    startStepProgress(0);
 
-    const interval = setInterval(() => {
-      setStepIndex((i) => (i < STEPS.length - 1 ? i + 1 : i));
-    }, 4000);
+    stepTimeoutRef.current = setTimeout(() => {
+      advanceStep(0);
+    }, STEPS[0].duration + 500);
 
     try {
-      const data: TranslationResult = await translateVideo(file);
-      clearInterval(interval);
-      setResult(data);
+      await translateVideo(file);
+
+      // Finish cleanly
+      if (progressRef.current) clearInterval(progressRef.current);
+      if (stepTimeoutRef.current) clearTimeout(stepTimeoutRef.current);
+      setStepProgress(100);
       setStepIndex(STEPS.length - 1);
+      setLoading(false);
+      setSuccess(true);
     } catch (err) {
-      clearInterval(interval);
+      if (progressRef.current) clearInterval(progressRef.current);
+      if (stepTimeoutRef.current) clearTimeout(stepTimeoutRef.current);
       setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
       setLoading(false);
     }
   };
 
+  const overallProgress =
+    ((stepIndex + stepProgress / 100) / STEPS.length) * 100;
+
   return (
-    <div className="min-h-full bg-[#0d0b1e] p-8 font-['Outfit',sans-serif]">
-      <div className="max-w-2xl mx-auto">
-        {/* Page Header */}
+    <div
+      className="min-h-full bg-[#080612] p-8"
+      style={{ fontFamily: "'DM Sans', 'Outfit', sans-serif" }}
+    >
+      {/* Ambient glow background */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse 60% 40% at 50% 0%, rgba(109,40,217,0.12) 0%, transparent 70%)",
+        }}
+      />
+
+      <div className="relative max-w-lg mx-auto">
+        {/* Header */}
         <div className="mb-8">
-          <h2 className="text-2xl font-semibold text-white tracking-tight">
+          <div className="flex items-center gap-2 mb-3">
+            <div
+              className="w-1.5 h-1.5 rounded-full bg-violet-400"
+              style={{ boxShadow: "0 0 8px rgba(167,139,250,0.9)" }}
+            />
+            <span
+              className="text-[10px] uppercase tracking-widest"
+              style={{ color: "rgba(167,139,250,0.7)" }}
+            >
+              Subtitle Generator
+            </span>
+          </div>
+          <h2 className="text-2xl font-semibold text-white tracking-tight leading-tight">
             Generate Subtitles
           </h2>
-          <p className="text-white/40 text-sm mt-1">
-            Upload a video and Whisper will transcribe it automatically
+          <p
+            className="text-sm mt-1"
+            style={{ color: "rgba(255,255,255,0.35)" }}
+          >
+            Drop a video — Whisper will transcribe it automatically
           </p>
         </div>
 
-        {/* Upload Zone */}
-        <div
-          className={`relative border rounded-2xl p-10 text-center transition-all duration-200 cursor-pointer ${
-            dragging
-              ? "border-violet-400 bg-violet-500/5 shadow-[0_0_30px_rgba(139,92,246,0.1)]"
-              : "border-dashed border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.03]"
-          }`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => !file && fileInputRef.current?.click()}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="video/*"
-            className="hidden"
-            onChange={handleFileChange}
-          />
+        {/* ── DROP ZONE ── */}
+        {!loading && (
+          <div
+            className="relative rounded-2xl transition-all duration-300"
+            style={{
+              border: dragging
+                ? "1px solid rgba(139,92,246,0.6)"
+                : file
+                  ? "1px solid rgba(16,185,129,0.25)"
+                  : "1px dashed rgba(255,255,255,0.1)",
+              background: dragging
+                ? "rgba(139,92,246,0.06)"
+                : file
+                  ? "rgba(16,185,129,0.04)"
+                  : "rgba(255,255,255,0.02)",
+              boxShadow: dragging ? "0 0 40px rgba(139,92,246,0.08)" : "none",
+              cursor: file ? "default" : "pointer",
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => !file && fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
 
-          {!file ? (
-            <div className="space-y-3">
-              <div className="w-14 h-14 mx-auto rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-                <svg
-                  width="24"
-                  height="24"
-                  fill="none"
-                  stroke="#a78bfa"
-                  strokeWidth="1.5"
-                  viewBox="0 0 24 24"
+            {/* Empty state */}
+            {!file && (
+              <div className="p-14 text-center space-y-5">
+                <div
+                  className="w-16 h-16 mx-auto rounded-2xl flex items-center justify-center"
+                  style={{
+                    background: "rgba(109,40,217,0.12)",
+                    border: "1px solid rgba(139,92,246,0.2)",
+                    color: "#a78bfa",
+                  }}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-                  />
-                </svg>
+                  <Upload size={24} strokeWidth={1.4} />
+                </div>
+                <div>
+                  <p className="text-white/70 font-medium text-sm">
+                    Drop your video here
+                  </p>
+                  <p className="text-white/25 text-xs mt-1">
+                    MP4 · MOV · AVI · MKV &nbsp;·&nbsp; up to 500 MB
+                  </p>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                  className="text-xs px-5 py-2 rounded-lg transition-colors"
+                  style={{
+                    color: "#a78bfa",
+                    border: "1px solid rgba(139,92,246,0.3)",
+                    background: "rgba(139,92,246,0.08)",
+                  }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background = "rgba(139,92,246,0.16)")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = "rgba(139,92,246,0.08)")
+                  }
+                >
+                  Browse file
+                </button>
               </div>
-              <div>
-                <p className="text-white/70 font-medium text-sm">
-                  Drop your video here
-                </p>
-                <p className="text-white/30 text-xs mt-1">
-                  MP4, MOV, AVI, MKV · up to 500MB
-                </p>
+            )}
+
+            {/* File selected */}
+            {file && (
+              <div className="p-5 flex items-center gap-4">
+                <div
+                  className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                  style={{
+                    background: "rgba(16,185,129,0.1)",
+                    border: "1px solid rgba(16,185,129,0.2)",
+                    color: "#34d399",
+                  }}
+                >
+                  <Video size={20} strokeWidth={1.5} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/85 font-medium text-sm truncate">
+                    {file.name}
+                  </p>
+                  <p className="text-white/35 text-xs mt-0.5">
+                    {formatBytes(file.size)}
+                  </p>
+                </div>
+                <button
+                  onClick={handleRemove}
+                  className="text-xs px-3 py-1.5 rounded-lg transition-colors"
+                  style={{
+                    color: "rgba(255,255,255,0.3)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.color = "#f87171")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.color = "rgba(255,255,255,0.3)")
+                  }
+                >
+                  Remove
+                </button>
               </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  fileInputRef.current?.click();
+            )}
+          </div>
+        )}
+
+        {/* ── PROCESSING PANEL ── */}
+        {loading && (
+          <div
+            className="rounded-2xl overflow-hidden"
+            style={{
+              border: "1px solid rgba(139,92,246,0.2)",
+              background: "rgba(255,255,255,0.02)",
+            }}
+          >
+            {/* Top bar: file info + elapsed */}
+            <div
+              className="px-5 py-3.5 flex items-center justify-between"
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+            >
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="w-2 h-2 rounded-full bg-violet-400"
+                  style={{
+                    animation: "pulse 1.5s ease-in-out infinite",
+                    boxShadow: "0 0 8px rgba(167,139,250,0.8)",
+                  }}
+                />
+                <span className="text-xs text-white/50 truncate max-w-[200px]">
+                  {file?.name}
+                </span>
+              </div>
+              <span
+                className="text-xs tabular-nums"
+                style={{
+                  color: "rgba(167,139,250,0.6)",
+                  fontFamily: "'DM Mono', monospace",
                 }}
-                className="text-xs text-violet-400 border border-violet-500/30 bg-violet-500/10 px-4 py-1.5 rounded-lg hover:bg-violet-500/20 transition-colors"
               >
-                Browse file
-              </button>
+                {formatElapsed(elapsedSeconds)}
+              </span>
             </div>
-          ) : (
-            <div className="flex items-center gap-4 text-left">
-              <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
-                <svg
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="#34d399"
-                  strokeWidth="1.5"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-white/85 font-medium text-sm truncate">
-                  {file.name}
-                </p>
-                <p className="text-white/35 text-xs mt-0.5">
-                  {formatBytes(file.size)}
-                </p>
-              </div>
-              <button
-                onClick={handleRemove}
-                className="text-xs text-white/30 hover:text-white/60 border border-white/10 hover:border-white/20 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                Remove
-              </button>
-            </div>
-          )}
-        </div>
 
-        {/* Generate Button */}
-        {file && !loading && !result && (
+            {/* Overall progress bar */}
+            <div
+              className="h-0.5 w-full"
+              style={{ background: "rgba(255,255,255,0.05)" }}
+            >
+              <div
+                className="h-full transition-all duration-500"
+                style={{
+                  width: `${overallProgress}%`,
+                  background: "linear-gradient(90deg, #7c3aed, #a78bfa)",
+                  boxShadow: "0 0 10px rgba(167,139,250,0.5)",
+                }}
+              />
+            </div>
+
+            {/* Steps */}
+            <div className="p-5 space-y-1">
+              {STEPS.map((step, i) => {
+                const isDone = i < stepIndex;
+                const isActive = i === stepIndex;
+                const isPending = i > stepIndex;
+
+                return (
+                  <div
+                    key={i}
+                    className="rounded-xl px-4 py-3.5 transition-all duration-300"
+                    style={{
+                      background: isActive
+                        ? "rgba(139,92,246,0.07)"
+                        : "transparent",
+                      border: isActive
+                        ? "1px solid rgba(139,92,246,0.15)"
+                        : "1px solid transparent",
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Status indicator */}
+                      <div
+                        className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-300"
+                        style={{
+                          background: isDone
+                            ? "rgba(16,185,129,0.15)"
+                            : isActive
+                              ? "rgba(139,92,246,0.2)"
+                              : "rgba(255,255,255,0.05)",
+                          border: isDone
+                            ? "1px solid rgba(16,185,129,0.4)"
+                            : isActive
+                              ? "1px solid rgba(139,92,246,0.4)"
+                              : "1px solid rgba(255,255,255,0.08)",
+                          color: isDone
+                            ? "#34d399"
+                            : isActive
+                              ? "#a78bfa"
+                              : "rgba(255,255,255,0.2)",
+                        }}
+                      >
+                        {isDone ? (
+                          <Check size={12} strokeWidth={2.5} />
+                        ) : isActive ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <span
+                            className="text-[9px] font-semibold"
+                            style={{ fontFamily: "'DM Mono', monospace" }}
+                          >
+                            {i + 1}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Labels */}
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className="text-sm font-medium transition-colors"
+                          style={{
+                            color: isDone
+                              ? "rgba(255,255,255,0.4)"
+                              : isActive
+                                ? "rgba(255,255,255,0.9)"
+                                : "rgba(255,255,255,0.25)",
+                          }}
+                        >
+                          {step.label}
+                        </p>
+                        {isActive && (
+                          <p
+                            className="text-xs mt-0.5"
+                            style={{ color: "rgba(167,139,250,0.6)" }}
+                          >
+                            {step.desc}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Per-step progress % or done badge */}
+                      {isDone && (
+                        <span
+                          className="text-[10px] px-2 py-0.5 rounded-full"
+                          style={{
+                            color: "#34d399",
+                            background: "rgba(16,185,129,0.1)",
+                          }}
+                        >
+                          Done
+                        </span>
+                      )}
+                      {isActive && (
+                        <span
+                          className="text-[10px] tabular-nums"
+                          style={{
+                            color: "rgba(167,139,250,0.7)",
+                            fontFamily: "'DM Mono', monospace",
+                          }}
+                        >
+                          {Math.round(stepProgress)}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Per-step progress bar */}
+                    {isActive && (
+                      <div
+                        className="mt-3 h-0.5 rounded-full overflow-hidden"
+                        style={{ background: "rgba(255,255,255,0.06)" }}
+                      >
+                        <div
+                          className="h-full rounded-full transition-all duration-200"
+                          style={{
+                            width: `${stepProgress}%`,
+                            background:
+                              "linear-gradient(90deg, #6d28d9, #a78bfa)",
+                            boxShadow: "0 0 8px rgba(167,139,250,0.4)",
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer hint */}
+            <div
+              className="px-5 py-3 flex items-center gap-2"
+              style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+            >
+              <Info size={12} style={{ color: "rgba(255,255,255,0.2)" }} />
+              <p
+                className="text-[11px]"
+                style={{ color: "rgba(255,255,255,0.2)" }}
+              >
+                Large files may take several minutes · Keep this tab open
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── SUCCESS ── */}
+        {success && (
+          <div
+            className="mt-4 rounded-xl px-4 py-3.5 flex items-center gap-3"
+            style={{
+              background: "rgba(16,185,129,0.06)",
+              border: "1px solid rgba(16,185,129,0.2)",
+            }}
+          >
+            <CheckCircle2
+              size={22}
+              style={{ color: "#34d399", flexShrink: 0 }}
+            />
+            <div>
+              <p className="text-sm font-medium text-emerald-400">
+                Subtitles generated
+              </p>
+              <p className="text-xs text-emerald-400/50 mt-0.5">
+                Your video has been processed successfully
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── ERROR ── */}
+        {error && (
+          <div
+            className="mt-4 rounded-xl px-4 py-3.5 flex items-start gap-3"
+            style={{
+              background: "rgba(239,68,68,0.06)",
+              border: "1px solid rgba(239,68,68,0.2)",
+            }}
+          >
+            <AlertCircle
+              size={18}
+              style={{ color: "#f87171", flexShrink: 0, marginTop: 1 }}
+            />
+            <div>
+              <p className="text-sm font-medium text-red-400">
+                Something went wrong
+              </p>
+              <p className="text-xs text-red-400/60 mt-0.5">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* ── SUBMIT BUTTON ── */}
+        {file && !loading && (
           <button
             onClick={handleSubmit}
-            className="w-full mt-4 py-3 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-violet-600 to-purple-700 hover:from-violet-500 hover:to-purple-600 transition-all shadow-[0_4px_20px_rgba(124,58,237,0.3)] hover:shadow-[0_4px_28px_rgba(124,58,237,0.45)]"
+            className="w-full mt-4 py-3 rounded-xl text-sm font-semibold text-white transition-all duration-200"
+            style={{
+              background: "linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%)",
+              boxShadow: "0 0 24px rgba(109,40,217,0.3)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.boxShadow = "0 0 36px rgba(109,40,217,0.5)";
+              e.currentTarget.style.transform = "translateY(-1px)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = "0 0 24px rgba(109,40,217,0.3)";
+              e.currentTarget.style.transform = "translateY(0)";
+            }}
           >
             Generate Subtitles
           </button>
         )}
-
-        {/* Loading Steps */}
-        {loading && (
-          <div className="mt-6 bg-white/[0.03] border border-white/8 rounded-2xl p-6">
-            <p className="text-white/30 text-[10px] tracking-[0.15em] uppercase font-medium mb-5">
-              Processing
-            </p>
-            <div className="space-y-4">
-              {STEPS.map((step, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs transition-all duration-300 ${
-                      i < stepIndex
-                        ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-400"
-                        : i === stepIndex
-                          ? "bg-violet-500/20 border border-violet-400/50"
-                          : "bg-white/3 border border-white/8"
-                    }`}
-                  >
-                    {i < stepIndex ? (
-                      <svg
-                        width="10"
-                        height="10"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M4.5 12.75l6 6 9-13.5"
-                        />
-                      </svg>
-                    ) : i === stepIndex ? (
-                      <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-                    ) : null}
-                  </div>
-                  <span
-                    className={`text-sm transition-colors duration-300 ${
-                      i < stepIndex
-                        ? "text-emerald-400"
-                        : i === stepIndex
-                          ? "text-white/85 font-medium"
-                          : "text-white/25"
-                    }`}
-                  >
-                    {step}
-                    {i === stepIndex ? "..." : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="mt-4 bg-red-500/8 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm flex items-center gap-2">
-            <svg
-              width="14"
-              height="14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-              />
-            </svg>
-            {error}
-          </div>
-        )}
-
-        {/* Result */}
-        {result && (
-          <div className="mt-6 bg-white/[0.03] border border-white/8 rounded-2xl overflow-hidden">
-            {/* Success banner */}
-            <div className="bg-emerald-500/5 border-b border-emerald-500/10 px-5 py-3 flex items-center gap-2">
-              <svg
-                width="14"
-                height="14"
-                fill="none"
-                stroke="#34d399"
-                strokeWidth="2.5"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4.5 12.75l6 6 9-13.5"
-                />
-              </svg>
-              <span className="text-emerald-400 text-xs font-medium">
-                Subtitles generated successfully
-              </span>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex border-b border-white/6 px-5">
-              {(["preview", "transcript", "segments"] as Tab[]).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`py-3 mr-6 text-xs font-medium capitalize tracking-wide border-b-2 transition-colors ${
-                    activeTab === tab
-                      ? "text-violet-400 border-violet-400"
-                      : "text-white/30 border-transparent hover:text-white/50"
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-
-            <div className="p-5">
-              {/* Preview */}
-              {activeTab === "preview" && (
-                <div className="space-y-4">
-                  <video
-                    ref={videoRef}
-                    controls
-                    className="w-full rounded-xl bg-black"
-                  >
-                    <source src={result.video_url} />
-                    <track
-                      src={result.subtitle_url}
-                      kind="subtitles"
-                      srcLang="en"
-                      label="English"
-                      default
-                    />
-                  </video>
-                  <div className="flex gap-3">
-                    <a
-                      href={result.subtitle_url}
-                      download
-                      className="flex-1 py-2.5 text-center text-xs font-medium text-violet-300 bg-violet-500/10 border border-violet-500/25 rounded-xl hover:bg-violet-500/20 transition-colors"
-                    >
-                      ↓ Download .srt
-                    </a>
-                    <a
-                      href={result.video_url}
-                      download
-                      className="flex-1 py-2.5 text-center text-xs font-medium text-white/40 bg-white/5 border border-white/10 rounded-xl hover:bg-white/8 transition-colors"
-                    >
-                      ↓ Download video
-                    </a>
-                  </div>
-                </div>
-              )}
-
-              {/* Transcript */}
-              {activeTab === "transcript" && (
-                <p className="text-white/65 text-sm leading-relaxed font-light">
-                  {result.text}
-                </p>
-              )}
-
-              {/* Segments */}
-              {activeTab === "segments" && (
-                <div className="space-y-2">
-                  {result.segments.map((seg) => (
-                    <div
-                      key={seg.id}
-                      className="flex gap-3 items-start bg-white/[0.02] rounded-lg px-3 py-2.5"
-                    >
-                      <span className="font-mono text-[10px] text-violet-400 whitespace-nowrap pt-0.5 shrink-0">
-                        {formatTime(seg.start)} → {formatTime(seg.end)}
-                      </span>
-                      <span className="text-white/65 text-sm leading-relaxed">
-                        {seg.text.trim()}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Keyframes */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono&display=swap');
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+      `}</style>
     </div>
   );
 };

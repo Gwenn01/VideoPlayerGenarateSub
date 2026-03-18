@@ -1,51 +1,44 @@
 import os
 import subprocess
-from .whisper_services import transcribe_audio, format_time, generate_srt, save_srt
+import uuid
+from django.conf import settings
+from .whisper_services import transcribe_audio, save_srt
+from .attach_services import AttachSubtitleService
 
 class TranslatorService:
     
     # CONVERT THE VIDEO TO AUDIO
     @staticmethod
-    def extract_audio(video_path):
-        # Output audio path (same name, different extension)
+    def extract_audio(video_path: str) -> str:
         audio_path = os.path.splitext(video_path)[0] + ".mp3"
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,      # input video
-            "-q:a", "0",           # best audio quality
-            "-map", "a",           # extract audio track only
-            audio_path,            # output audio file
-            "-y"                   # overwrite if exists
-        ]
+        cmd = ["ffmpeg", "-i", video_path, "-q:a", "0", "-map", "a", audio_path, "-y"]
         subprocess.run(cmd, check=True)
         return audio_path
-
-
-    # ATTACH THE SUBTILE ON THE VIDEO
-    def attach_subtitle_to_video(video_path, srt_path, output_path):
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,        # input video
-            "-i", srt_path,          # input subtitle
-            "-c", "copy",            # copy video/audio (no re-encode)
-            "-c:s", "mov_text",      # subtitle codec (for .mp4)
-            output_path              # output video
-        ]
-        subprocess.run(cmd, check=True)
-        return output_path
-
-    def burn_subtitle_to_video(video_path, srt_path, output_path):
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-vf", f"subtitles={srt_path}",   # burn into video frames
-            output_path
-        ]
-        subprocess.run(cmd, check=True)
-        return output_path
     
-    # LAST STEP
-    def process_video(video_path):
+    # attach the subtle on the video
+    @staticmethod
+    def attach_subtitle(video_path: str, subtitle_path: str) -> dict:
+        output_dir = os.path.join(settings.MEDIA_ROOT, "video_sub")
+        os.makedirs(output_dir, exist_ok=True)
+
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+
+        unique_id = uuid.uuid4().hex
+
+        soft_path = os.path.join(output_dir, f"{base_name}_{unique_id}_soft.mp4")
+        burn_path = os.path.join(output_dir, f"{base_name}_{unique_id}_burned.mp4")
+
+        AttachSubtitleService.attach_subtitle_to_video(video_path, subtitle_path, soft_path)
+        AttachSubtitleService.burn_subtitle_to_video(video_path, subtitle_path, burn_path)
+
+        return {
+            "soft_path": soft_path,
+            "burned_path": burn_path,
+        }
+
+    @staticmethod
+    # LAST STEP PROCESSING VIDEO
+    def process_video(video_path: str) -> dict:
         print("Step 1: Extracting audio...")
         audio_path = TranslatorService.extract_audio(video_path)
 
@@ -56,9 +49,23 @@ class TranslatorService:
         srt_path = os.path.splitext(video_path)[0] + ".srt"
         save_srt(result["segments"], srt_path)
 
+        print("Step 4: Attaching subtitle to video...")
+        output_path = os.path.splitext(video_path)[0] + "_subtitled.mp4"
+        final_video = AttachSubtitleService.attach_subtitle(video_path, srt_path, output_path)
         print("Done!")
         return {
-            "video": video_path,
+            "original_video": video_path,
             "subtitle": srt_path,
-            "text": result["text"]
+            "video": final_video,
+            "text": result["text"],
         }
+
+
+    @staticmethod        
+    # CLEANUP 
+    def delete_upload_files(*paths: str) -> None:
+        """Delete one or more files from disk."""
+        for path in paths:
+            if path and os.path.exists(path):
+                os.remove(path)
+                print(f"Deleted: {path}")
