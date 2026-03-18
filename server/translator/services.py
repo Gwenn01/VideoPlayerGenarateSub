@@ -1,43 +1,64 @@
 import os
-import whisper
-import shutil
+import subprocess
+from .whisper_services import transcribe_audio, format_time, generate_srt, save_srt
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Points to translator/bin where ffmpeg.exe should be
-FFMPEG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
-os.environ["PATH"] = FFMPEG_DIR + os.pathsep + os.environ["PATH"]
-print("FFmpeg detected at:", shutil.which("ffmpeg"))
-model = whisper.load_model("base")
-
-def transcribe_audio(file_path):
-    file_path = os.path.join(BASE_DIR, file_path)
-    print("Processing file:", file_path)
-    result = model.transcribe(file_path)
-    return {
-        "text": result["text"],
-        "segments": result["segments"]
-    }
+class TranslatorService:
     
+    # CONVERT THE VIDEO TO AUDIO
+    @staticmethod
+    def extract_audio(video_path):
+        # Output audio path (same name, different extension)
+        audio_path = os.path.splitext(video_path)[0] + ".mp3"
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,      # input video
+            "-q:a", "0",           # best audio quality
+            "-map", "a",           # extract audio track only
+            audio_path,            # output audio file
+            "-y"                   # overwrite if exists
+        ]
+        subprocess.run(cmd, check=True)
+        return audio_path
+
+
+    # ATTACH THE SUBTILE ON THE VIDEO
+    def attach_subtitle_to_video(video_path, srt_path, output_path):
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,        # input video
+            "-i", srt_path,          # input subtitle
+            "-c", "copy",            # copy video/audio (no re-encode)
+            "-c:s", "mov_text",      # subtitle codec (for .mp4)
+            output_path              # output video
+        ]
+        subprocess.run(cmd, check=True)
+        return output_path
+
+    def burn_subtitle_to_video(video_path, srt_path, output_path):
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,
+            "-vf", f"subtitles={srt_path}",   # burn into video frames
+            output_path
+        ]
+        subprocess.run(cmd, check=True)
+        return output_path
     
-def format_time(seconds):
-    millis = int(seconds * 1000)
-    hours = millis // 3600000
-    minutes = (millis % 3600000) // 60000
-    seconds = (millis % 60000) // 1000
-    milliseconds = millis % 1000
-    return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
+    # LAST STEP
+    def process_video(video_path):
+        print("Step 1: Extracting audio...")
+        audio_path = TranslatorService.extract_audio(video_path)
 
-def generate_srt(segments):
-    srt = ""
-    for i, seg in enumerate(segments):
-        start = format_time(seg['start'])
-        end = format_time(seg['end'])
-        text = seg['text'].strip()
-        srt += f"{i+1}\n{start} --> {end}\n{text}\n\n"
-    return srt
+        print("Step 2: Transcribing audio...")
+        result = transcribe_audio(audio_path)
 
-def save_srt(segments, output_path):
-    srt_content = generate_srt(segments)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(srt_content)
-    return output_path
+        print("Step 3: Generating subtitle...")
+        srt_path = os.path.splitext(video_path)[0] + ".srt"
+        save_srt(result["segments"], srt_path)
+
+        print("Done!")
+        return {
+            "video": video_path,
+            "subtitle": srt_path,
+            "text": result["text"]
+        }
