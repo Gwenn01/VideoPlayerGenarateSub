@@ -1,0 +1,10 @@
+venv/
+env/
+ENV/
+.venv/
+.vscode/
+__pycache__
+__pycache__/
+server/translator/bin/
+translator/bin/
+bin/

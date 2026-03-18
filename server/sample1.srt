@@ -1,0 +1,16 @@
+1
+00:00:00,000 --> 00:00:02,640
+Welcome to our channel, podcast.
+
+2
+00:00:02,640 --> 00:00:05,240
+We are so excited to have you here.
+
+3
+00:00:05,240 --> 00:00:11,080
+In this episode, our young speakers will share their thoughts, stories, and ideas.
+
+4
+00:00:11,080 --> 00:00:17,080
+Sit back, listen, and enjoy the voices of our bright and curious learners.
+

@@ -1,0 +1,6 @@
+Django>=4.2
+djrestframework
+openai-whisper
+ffmpeg-python
+numpy
+torch
